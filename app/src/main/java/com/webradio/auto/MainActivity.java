@@ -24,7 +24,7 @@ public class MainActivity extends AppCompatActivity
     // ============================================================
     // CONFIGURAZIONE - Cambia questo URL col tuo server
     // ============================================================
-    private static final String WEBAPP_URL = "http://shopmio.altervista.org/radio/index.php";
+    private static final String WEBAPP_URL = "https://shopmio.altervista.org/radio/";
     // ============================================================
 
     private WebView webView;
