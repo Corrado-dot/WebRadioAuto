@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.v4.media.MediaBrowserCompat;
@@ -34,6 +35,7 @@ public class RadioMediaService extends MediaBrowserServiceCompat {
     private MediaSessionCompat mediaSession;
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
+    private MediaPlayer silentPlayer;
 
     public interface CommandListener {
         void onPrevious();
@@ -70,6 +72,7 @@ public class RadioMediaService extends MediaBrowserServiceCompat {
         instance = this;
         createNotificationChannel();
         setupMediaSession();
+        startSilentAudio();
         requestAudioFocus();
     }
 
@@ -146,6 +149,73 @@ public class RadioMediaService extends MediaBrowserServiceCompat {
         updateMetadata();
         mediaSession.setActive(true);
         setSessionToken(mediaSession.getSessionToken());
+        Log.d(TAG, "MediaSession attiva");
+    }
+
+    /**
+     * FIX MT8227L / Android 13:
+     * Riproduce un file WAV silenzioso in loop tramite MediaPlayer nativo.
+     * Questo e NECESSARIO perche Android 13 sulle autoradio con chipset
+     * MediaTek 8227L richiede un MediaPlayer nativo attivo per considerare
+     * la MediaSession come quella "corrente" e inoltrarle i comandi volante.
+     * L'audio HTML5 nella WebView NON viene riconosciuto dal sistema.
+     */
+    private void startSilentAudio() {
+        try {
+            silentPlayer = new MediaPlayer();
+            silentPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build());
+            silentPlayer.setVolume(0f, 0f);
+
+            java.io.File silentFile = createSilentWavFile();
+            if (silentFile != null) {
+                silentPlayer.setDataSource(silentFile.getAbsolutePath());
+                silentPlayer.setLooping(true);
+                silentPlayer.prepare();
+                silentPlayer.start();
+                Log.d(TAG, "Audio silenzioso avviato");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Errore audio silenzioso: " + e.getMessage());
+        }
+    }
+
+    private java.io.File createSilentWavFile() {
+        try {
+            java.io.File file = new java.io.File(getCacheDir(), "silence.wav");
+            if (file.exists()) return file;
+
+            int sampleRate = 8000;
+            int numSamples = sampleRate;
+            int dataSize = numSamples * 2;
+
+            byte[] wav = new byte[44 + dataSize];
+            wav[0]='R'; wav[1]='I'; wav[2]='F'; wav[3]='F';
+            int fileSize = 36 + dataSize;
+            wav[4]=(byte)(fileSize&0xff); wav[5]=(byte)((fileSize>>8)&0xff);
+            wav[6]=(byte)((fileSize>>16)&0xff); wav[7]=(byte)((fileSize>>24)&0xff);
+            wav[8]='W'; wav[9]='A'; wav[10]='V'; wav[11]='E';
+            wav[12]='f'; wav[13]='m'; wav[14]='t'; wav[15]=' ';
+            wav[16]=16; wav[20]=1;
+            wav[22]=1;
+            wav[24]=(byte)(sampleRate&0xff); wav[25]=(byte)((sampleRate>>8)&0xff);
+            int byteRate = sampleRate * 2;
+            wav[28]=(byte)(byteRate&0xff); wav[29]=(byte)((byteRate>>8)&0xff);
+            wav[32]=2;
+            wav[34]=16;
+            wav[36]='d'; wav[37]='a'; wav[38]='t'; wav[39]='a';
+            wav[40]=(byte)(dataSize&0xff); wav[41]=(byte)((dataSize>>8)&0xff);
+            wav[42]=(byte)((dataSize>>16)&0xff); wav[43]=(byte)((dataSize>>24)&0xff);
+
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(file);
+            fos.write(wav);
+            fos.close();
+            return file;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void requestAudioFocus() {
@@ -254,6 +324,10 @@ public class RadioMediaService extends MediaBrowserServiceCompat {
 
     public void stopService() {
         isPlaying = false;
+        if (silentPlayer != null) {
+            try { silentPlayer.stop(); silentPlayer.release(); } catch (Exception e) {}
+            silentPlayer = null;
+        }
         if (mediaSession != null) {
             mediaSession.setActive(false);
             mediaSession.release();
@@ -282,6 +356,9 @@ public class RadioMediaService extends MediaBrowserServiceCompat {
     @Override
     public void onDestroy() {
         instance = null;
+        if (silentPlayer != null) {
+            try { silentPlayer.stop(); silentPlayer.release(); } catch (Exception e) {}
+        }
         if (mediaSession != null) {
             mediaSession.setActive(false);
             mediaSession.release();
